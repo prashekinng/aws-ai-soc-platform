@@ -4,12 +4,6 @@ output "customer_ec2_ids" {
   value       = { for k, v in aws_instance.customer_ec2 : k => v.id }
 }
 
-# Customer EC2 public IPs (Elastic IPs)
-output "customer_eip_addresses" {
-  description = "Elastic IP addresses assigned to customer EC2s"
-  value       = { for k, v in aws_eip.customer_eip : k => v.public_ip }
-}
-
 # Customer VPC IDs
 output "customer_vpc_ids" {
   description = "VPC IDs for all customer VPCs"

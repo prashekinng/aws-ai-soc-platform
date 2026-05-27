@@ -11,6 +11,7 @@ variable "project" {
 variable "customers" {
   description = "customers list"
   type        = map(object({
+    vpc_key     = string
     vpc_cidr    = string
     subnet_cidr = string
   }))

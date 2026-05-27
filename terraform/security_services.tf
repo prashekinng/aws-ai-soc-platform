@@ -17,7 +17,7 @@ resource "aws_securityhub_account" "cms" {
 # 2. Subscribe to a specific standard
 resource "aws_securityhub_standards_subscription" "cis" {
   depends_on    = [aws_securityhub_account.cms]
-  standards_arn = "arn:aws:securityhub:ap-south-1::standards/cis-aws-foundations-benchmark/v/1.2.0"
+  standards_arn = "arn:aws:securityhub:ap-south-1::standards/cis-aws-foundations-benchmark/v/1.4.0"
 }
 
 resource "aws_securityhub_standards_subscription" "fsbp" {
@@ -81,15 +81,15 @@ resource "aws_cloudtrail" "cms" {
 ## VPC Flow logs
 
 resource "aws_flow_log" "cms" {
-  for_each = var.customers
-  iam_role_arn    = aws_iam_role.vpc_flow_logs.arn
-  log_destination = aws_cloudwatch_log_group.cms[each.key].arn
+  for_each             = local.customer_vpcs
+  iam_role_arn         = aws_iam_role.vpc_flow_logs.arn
+  log_destination      = aws_cloudwatch_log_group.cms[each.key].arn
   log_destination_type = "cloud-watch-logs"
-  traffic_type    = "ALL"
-  vpc_id          = aws_vpc.customer[each.key].id
+  traffic_type         = "ALL"
+  vpc_id               = aws_vpc.customer[each.key].id
 
   tags = {
-    Name = "cms-vpcflowlogs"
-    project = var.project 
+    Name    = "cms-${each.key}-vpcflowlogs"
+    project = var.project
   }
 }

@@ -2,7 +2,7 @@ resource "aws_security_group" "sg" {
   for_each = var.customers
   name = "cms-${each.key}-sg"
   description = "Allow inbound HTTP traffic for CMS"
-  vpc_id = aws_vpc.customer[each.key].id
+  vpc_id = aws_vpc.customer[each.value.vpc_key].id
 
   ingress {
     description = "HTTPS from internet"
