@@ -1,0 +1,143 @@
+name: CMS Security Scan
+
+on:
+  push:
+    branches:
+      - main              # runs on every merge to main
+      - feature/**        # runs on every feature branch push
+    paths:
+      - 'terraform/**'    # only when Terraform code changes
+      - 'lambda/**'      # or when Lambda code changes
+  pull_request:
+    branches:
+      - main              # runs on every PR targeting main — must pass before merge
+  schedule:
+    - cron: '0 3 * * 1'  # Prowler: every Monday 3am UTC (8:30am IST)
+  workflow_dispatch:       # manual trigger from GitHub UI
+
+jobs:
+
+# ─────────────────────────────────────────
+# JOB 1 — TRIVY IaC SCAN
+# Scans all Terraform files for misconfigurations.
+# Runs on: feature branch push + every PR + every merge to main + weekly
+# ─────────────────────────────────────────
+  trivy-iac-scan:
+    name: Trivy IaC Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy IaC scan on Terraform
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './terraform'   # updated — Terraform folder in new project
+          format: 'json'
+          output: 'trivy-iac-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'            # report findings but don't fail the pipeline
+
+      - name: Parse and post IaC results to Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python3 scripts/parse_scan_results.py trivy-iac
+
+      - name: Upload IaC scan report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-iac-report-${{ github.run_number }}
+          path: trivy-iac-results.json
+          retention-days: 90
+
+# ─────────────────────────────────────────
+# JOB 2 — TRIVY LAMBDA CODE SCAN
+# Scans Lambda Python files for vulnerabilities and secrets.
+# Replaces the old image scan — no Docker images in this project yet.
+# Runs on: feature branch push + every PR + every merge to main + weekly
+# ─────────────────────────────────────────
+  trivy-lambda-scan:
+    name: Trivy Lambda Code Scan
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run Trivy scan on Lambda code
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: 'fs'
+          scan-ref: './lambda'     # scans all Python files in lambda folder
+          format: 'json'
+          output: 'trivy-lambda-results.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+          exit-code: '0'
+
+      - name: Parse and post Lambda scan results to Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python3 scripts/parse_scan_results.py trivy-lambda   # reuses same parser, same format
+
+      - name: Upload Lambda scan report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: trivy-lambda-report-${{ github.run_number }}
+          path: trivy-lambda-results.json
+          retention-days: 90
+
+# ─────────────────────────────────────────
+# JOB 3 — PROWLER SCAN
+# Full AWS account security scan against CIS and FSBP benchmarks.
+# Runs on: weekly cron + manual trigger ONLY
+# NOT on every push — too slow (5-10 mins), costs AWS API calls
+# ─────────────────────────────────────────
+  prowler-scan:
+    name: Prowler AWS Scan
+    runs-on: ubuntu-latest
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Prowler
+        run: pip install prowler
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Run Prowler scan
+        run: |
+          prowler aws --region ap-south-1 \
+            --output-formats json html \
+            --output-directory ./prowler-output || true
+
+      - name: Install requests library
+        run: pip install requests
+
+      - name: Parse and post Prowler results to Slack
+        if: always()
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: python3 scripts/parse_scan_results.py prowler
+
+      - name: Upload Prowler HTML report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: prowler-report-${{ github.run_number }}
+          path: prowler-output/*.html
+          retention-days: 90
