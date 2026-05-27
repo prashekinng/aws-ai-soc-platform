@@ -83,6 +83,39 @@ def parse_trivy_images():
     print(f"Posted to Slack: {status} | Critical {total_critical} | High {total_high} | Medium {total_medium}")
 
 
+# ── TRIVY LAMBDA ──────────────────────────────────────────────────────────────
+
+def parse_trivy_lambda():
+    critical = high = medium = 0
+    try:
+        with open("trivy-lambda-results.json") as f:
+            data = json.load(f)
+        for result in data.get("Results", []):
+            for v in result.get("Vulnerabilities", []):
+                sev = v.get("Severity", "")
+                if sev == "CRITICAL":   critical += 1
+                elif sev == "HIGH":     high += 1
+                elif sev == "MEDIUM":   medium += 1
+            for m in result.get("Misconfigurations", []):
+                sev = m.get("Severity", "")
+                if sev == "CRITICAL":   critical += 1
+                elif sev == "HIGH":     high += 1
+                elif sev == "MEDIUM":   medium += 1
+    except Exception as e:
+        print(f"Error: {e}")
+
+    total  = critical + high + medium
+    status = "✅ Clean" if total == 0 else "⚠️ Issues found"
+    branch = os.environ.get("GITHUB_REF_NAME", "unknown")
+
+    post_to_slack(
+        f"*🐍 Trivy Lambda Code Scan — {status}*\n"
+        f"Branch: `{branch}`\n"
+        f"🔴 Critical: {critical}  🟠 High: {high}  🟡 Medium: {medium}\n"
+        f"Run: {RUN_URL}"
+    )
+    print(f"Posted to Slack: {status} | Critical {critical} | High {high} | Medium {medium}")
+
 # ── PROWLER ───────────────────────────────────────────────────────────────────
 
 def parse_prowler():
@@ -202,6 +235,7 @@ MODES = {
     "trivy-iac":    parse_trivy_iac,
     "trivy-images": parse_trivy_images,
     "prowler":      parse_prowler,
+    "trivy-lambda":   parse_trivy_lambda,
     "pulumi-preview": parse_pulumi_preview,
 }
 
