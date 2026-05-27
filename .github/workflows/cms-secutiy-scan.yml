@@ -7,7 +7,7 @@ on:
       - feature/**        # runs on every feature branch push
     paths:
       - 'terraform/**'    # only when Terraform code changes
-      - 'lambdas/**'      # or when Lambda code changes
+      - 'lambda/**'      # or when Lambda code changes
   pull_request:
     branches:
       - main              # runs on every PR targeting main — must pass before merge
@@ -70,7 +70,7 @@ jobs:
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: 'fs'
-          scan-ref: './lambdas'     # scans all Python files in lambdas folder
+          scan-ref: './lambda'     # scans all Python files in lambda folder
           format: 'json'
           output: 'trivy-lambda-results.json'
           severity: 'CRITICAL,HIGH,MEDIUM'
@@ -80,7 +80,7 @@ jobs:
         if: always()
         env:
           SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK_URL }}
-        run: python3 scripts/parse_scan_results.py trivy-iac   # reuses same parser, same format
+        run: python3 scripts/parse_scan_results.py trivy-lambda   # reuses same parser, same format
 
       - name: Upload Lambda scan report
         uses: actions/upload-artifact@v4
