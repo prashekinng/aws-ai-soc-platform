@@ -116,9 +116,7 @@ resource "aws_cloudwatch_event_rule" "ai_triage" {
   event_pattern = jsonencode({
     source      = ["aws.guardduty", "aws.securityhub"]
     detail-type = ["GuardDuty Finding", "Security Hub Findings - Imported"]
-    detail = {
-      severity = [{ numeric = [">=", 7] }]
-    }
+    
   })
 
   tags = {
@@ -196,8 +194,8 @@ resource "aws_lambda_permission" "approval_api_gateway" {
 
 data "archive_file" "ai_triage_zip" {
   type        = "zip"
-  source_file = "${path.module}/../lambdas/ai_triage_function.py"
-  output_path = "${path.module}/../lambdas/ai_triage_function.zip"
+  source_file = "${path.module}/../lambda/ai_triage_function.py"
+  output_path = "${path.module}/../lambda/ai_triage_function.zip"
 }
 
 resource "aws_lambda_function" "ai_triage" {
@@ -236,8 +234,8 @@ resource "aws_lambda_function" "ai_triage" {
 
 data "archive_file" "approval_handler_zip" {
   type        = "zip"
-  source_file = "${path.module}/../lambdas/approval_handler.py"
-  output_path = "${path.module}/../lambdas/approval_handler.zip"
+  source_file = "${path.module}/../lambda/approval_handler.py"
+  output_path = "${path.module}/../lambda/approval_handler.zip"
 }
 
 resource "aws_lambda_function" "approval_handler" {
