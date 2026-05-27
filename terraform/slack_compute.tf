@@ -10,23 +10,30 @@ data "aws_ami" "ubuntu_2204" {
   }
 }
 
-# 2. Define the EC2 Instance
 resource "aws_instance" "splunk_ec2" {
-  ami           = data.aws_ami.ubuntu_2204.id
-  instance_type = "t3.medium"
-  subnet_id = aws_subnet.splunk.id
+  ami                    = data.aws_ami.ubuntu_2204.id
+  instance_type          = "t3.medium"
+  subnet_id              = aws_subnet.splunk.id
   vpc_security_group_ids = [aws_security_group.splunk.id]
-  iam_instance_profile = aws_iam_instance_profile.splunk_profile.name
+  iam_instance_profile   = aws_iam_instance_profile.splunk_profile.name
+
   root_block_device {
     encrypted  = true
     kms_key_id = aws_kms_key.cms.arn
   }
 
+  user_data = base64encode(<<EOF
+#!/bin/bash
+snap install amazon-ssm-agent --classic
+systemctl start snap.amazon-ssm-agent.amazon-ssm-agent.service
+systemctl enable snap.amazon-ssm-agent.amazon-ssm-agent.service
+EOF
+  )
+
   tags = {
-    Name = "cms-splunk-ec2"
+    Name    = "cms-splunk-ec2"
     project = var.project
   }
-
 }
 
 # Create the EBS Volume

@@ -85,7 +85,7 @@ resource "aws_iam_role_policy_attachment" "splunk" {
     "arn:aws:iam::aws:policy/CloudWatchLogsReadOnlyAccess",
     "arn:aws:iam::aws:policy/AmazonS3ReadOnlyAccess",
     "arn:aws:iam::aws:policy/AWSSecurityHubReadOnlyAccess",
-    "arn:aws:iam::aws:policy/AWSConfigReadOnlyAccess"
+    "arn:aws:iam::aws:policy/AWSConfigUserAccess"
   ])
 
   role       = aws_iam_role.splunk.name
@@ -182,3 +182,85 @@ resource "aws_iam_role_policy" "vpc_flow_logs_policy" {
   })
 }
 
+
+# =============================================================================
+# IAM Role for AI Triage Lambda and Approval Handler Lambda
+# Permissions: Bedrock (invoke Claude), EC2 (describe + modify SG for containment),
+#              S3 (write audit logs), SSM (read VirusTotal API key), CloudWatch Logs
+# =============================================================================
+
+
+resource "aws_iam_role" "ai_triage_lambda" {
+  name = "cms-ai-triage-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect    = "Allow"
+        Principal = { Service = "lambda.amazonaws.com" }
+        Action    = "sts:AssumeRole"
+      }
+    ]
+  })
+
+  tags = {
+    Name    = "cms-ai-triage-role"
+    project = var.project
+  }
+}
+
+resource "aws_iam_role_policy" "ai_triage_permissions" {
+  name = "cms-ai-triage-policy"
+  role = aws_iam_role.ai_triage_lambda.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+
+      # Bedrock — invoke Claude 3 Haiku only (least privilege)
+      {
+        Effect   = "Allow"
+        Action   = ["bedrock:InvokeModel"]
+        Resource = "arn:aws:bedrock:ap-south-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+      },
+
+      # EC2 — describe instances (get customer tag + current SG)
+      #        modify instance attribute (move EC2 to quarantine SG or restore)
+      {
+        Effect = "Allow"
+        Action = [
+          "ec2:DescribeInstances",
+          "ec2:DescribeSecurityGroups",
+          "ec2:ModifyInstanceAttribute"
+        ]
+        Resource = "*"
+      },
+
+      # S3 — write audit logs only, to the specific audit bucket
+      {
+        Effect   = "Allow"
+        Action   = ["s3:PutObject", "s3:GetObject"]
+        Resource = "arn:aws:s3:::cms-ai-audit-logs-${var.project}/*"
+      },
+
+      # SSM — read the VirusTotal API key
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:GetParameter"]
+        Resource = "arn:aws:ssm:ap-south-1:*:parameter/cms/*"
+      },
+
+      # CloudWatch Logs — Lambda execution logs
+      {
+        Effect = "Allow"
+        Action = [
+          "logs:CreateLogGroup",
+          "logs:CreateLogStream",
+          "logs:PutLogEvents"
+        ]
+        Resource = "arn:aws:logs:*:*:*"
+      }
+    ]
+  })
+}

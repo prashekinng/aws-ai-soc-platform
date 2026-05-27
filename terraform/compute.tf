@@ -29,15 +29,5 @@ resource "aws_instance" "customer_ec2" {
   }
 }
 
-#assigning an EIP to customer ec2s
-resource "aws_eip" "customer_eip" {
-  for_each = var.customers
-  instance = aws_instance.customer_ec2[each.key].id
-
-  tags = {
-    Name = "cms-${each.key}-eip"
-    project = var.project
-  }
-}
 
 
