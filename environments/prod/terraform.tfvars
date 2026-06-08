@@ -13,5 +13,3 @@ customers = {
     subnet_cidr = "10.4.0.0/24"
   }
 }
-
-slack_webhook_url = "https://hooks.slack.com/services/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"
