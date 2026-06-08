@@ -1,0 +1,29 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "ec2:*",
+        "s3:*",
+        "iam:*",
+        "lambda:*",
+        "logs:*",
+        "guardduty:*",
+        "securityhub:*",
+        "events:*",
+        "kms:*",
+        "dynamodb:*",
+        "apigateway:*",
+        "ssm:*",
+        "bedrock:*"
+      ],
+      "Resource": "*",
+      "Condition": {
+        "StringEquals": {
+          "aws:RequestedRegion": "ap-south-1"
+        }
+      }
+    }
+  ]
+}
