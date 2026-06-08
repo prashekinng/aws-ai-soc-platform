@@ -4,11 +4,6 @@ on:
   push:
     branches:
       - main              # runs on every merge to main
-      - feature/**        # runs on every feature branch push
-    paths:
-      - 'terraform/**'    # only when Terraform code changes
-      - 'lambda/**'      # or when Lambda code changes
-      - '.github/workflows/**'
   pull_request:
     branches:
       - main              # runs on every PR targeting main — must pass before merge
@@ -169,6 +164,13 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
+      
+      - name: Package Lambda functions
+        run: |
+          cd lambda
+          zip ai_triage_function.zip ai_triage_function.py
+          zip approval_handler.zip approval_handler.py
+          cd ..
 
       - name: Terraform Init
         working-directory: terraform
@@ -210,7 +212,14 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-
+      
+      - name: Package Lambda functions
+        run: |
+          cd lambda
+          zip ai_triage_function.zip ai_triage_function.py
+          zip approval_handler.zip approval_handler.py
+          cd ..
+          
       - name: Terraform Init
         working-directory: terraform
         run: terraform init -backend-config="../environments/prod/backend.tf"
