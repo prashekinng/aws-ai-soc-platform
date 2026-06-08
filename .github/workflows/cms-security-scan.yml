@@ -8,6 +8,7 @@ on:
     paths:
       - 'terraform/**'    # only when Terraform code changes
       - 'lambda/**'      # or when Lambda code changes
+      - '.github/workflows/**'
   pull_request:
     branches:
       - main              # runs on every PR targeting main — must pass before merge
