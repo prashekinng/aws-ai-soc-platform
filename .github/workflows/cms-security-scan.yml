@@ -148,6 +148,7 @@ jobs:
 # ─────────────────────────────────────────
 # JOB 4 — TERRAFORM PLAN (prod)
 # Runs on push to main only
+# check
 # ─────────────────────────────────────────
   terraform-plan:
     name: Terraform Plan (prod)
@@ -167,9 +168,6 @@ jobs:
 
       - name: Setup Terraform
         uses: hashicorp/setup-terraform@v3
-
-      - name: Copy prod backend config
-        run: cp environments/prod/backend.tf terraform/backend_override.tf
 
       - name: Terraform Init
         working-directory: terraform
