@@ -142,3 +142,88 @@ jobs:
           name: prowler-report-${{ github.run_number }}
           path: prowler-output/*.html
           retention-days: 90
+
+
+
+# ─────────────────────────────────────────
+# JOB 4 — TERRAFORM PLAN (prod)
+# Runs on push to main only
+# ─────────────────────────────────────────
+  terraform-plan:
+    name: Terraform Plan (prod)
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Copy prod backend config
+        run: cp environments/prod/backend.tf terraform/backend_override.tf
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -backend-config="../environments/prod/backend.tf"
+
+      - name: Terraform Plan
+        working-directory: terraform
+        env:
+          TF_VAR_slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: terraform plan -var-file="../environments/prod/terraform.tfvars" -out=tfplan
+
+      - name: Upload plan artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tfplan-${{ github.run_number }}
+          path: terraform/tfplan
+          retention-days: 1
+
+# ─────────────────────────────────────────
+# JOB 5 — TERRAFORM APPLY (prod)
+# Requires human approval before running
+# ─────────────────────────────────────────
+  terraform-apply:
+    name: Terraform Apply (prod)
+    runs-on: ubuntu-latest
+    needs: terraform-plan
+    environment: production
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+
+      - name: Terraform Init
+        working-directory: terraform
+        run: terraform init -backend-config="../environments/prod/backend.tf"
+
+      - name: Download plan artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: tfplan-${{ github.run_number }}
+          path: terraform/
+
+      - name: Terraform Apply
+        working-directory: terraform
+        env:
+          TF_VAR_slack_webhook_url: ${{ secrets.SLACK_WEBHOOK_URL }}
+        run: terraform apply -auto-approve tfplan
