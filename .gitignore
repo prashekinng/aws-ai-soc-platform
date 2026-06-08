@@ -4,9 +4,6 @@
 .terraform/
 .terraform.lock.hcl
 
-# Variable files with sensitive values
-terraform.tfvars
-
 # Crash logs
 crash.log
 
