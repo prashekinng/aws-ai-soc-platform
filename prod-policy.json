@@ -6,7 +6,6 @@
       "Action": [
         "ec2:*",
         "s3:*",
-        "iam:*",
         "lambda:*",
         "logs:*",
         "guardduty:*",
@@ -16,7 +15,11 @@
         "dynamodb:*",
         "apigateway:*",
         "ssm:*",
-        "bedrock:*"
+        "bedrock:*",
+        "cloudtrail:*",
+        "config:*",
+        "sns:*",
+        "cloudwatch:*"
       ],
       "Resource": "*",
       "Condition": {
@@ -24,6 +27,11 @@
           "aws:RequestedRegion": "ap-south-1"
         }
       }
+    },
+    {
+      "Effect": "Allow",
+      "Action": "iam:*",
+      "Resource": "*"
     }
   ]
 }

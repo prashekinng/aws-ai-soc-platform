@@ -13,15 +13,16 @@
 # -----------------------------------------------------------------------------
 
 resource "aws_security_group" "quarantine" {
-  name        = "cms-quarantine-sg"
-  description = "Zero-rule quarantine SG. EC2s moved here are fully network-isolated for containment."
-  vpc_id      = aws_vpc.splunk.id  # Placed in security VPC — not customer VPCs
+  for_each    = var.customers
+  name        = "cms-quarantine-sg-${each.key}"
+  description = "Zero-rule quarantine SG for ${each.key}. EC2s moved here are fully network-isolated for containment."
+  vpc_id      = aws_vpc.customer[each.key].id
 
   # No ingress rules  — all inbound traffic blocked
   # No egress rules   — all outbound traffic blocked
 
   tags = {
-    Name    = "cms-quarantine-sg"
+    Name    = "cms-quarantine-sg-${each.key}"
     project = var.project
     Purpose = "incident-containment"
   }
@@ -116,7 +117,6 @@ resource "aws_cloudwatch_event_rule" "ai_triage" {
   event_pattern = jsonencode({
     source      = ["aws.guardduty", "aws.securityhub"]
     detail-type = ["GuardDuty Finding", "Security Hub Findings - Imported"]
-    
   })
 
   tags = {
@@ -210,7 +210,7 @@ resource "aws_lambda_function" "ai_triage" {
   environment {
     variables = {
       SLACK_WEBHOOK_URL    = var.slack_webhook_url
-      QUARANTINE_SG_ID     = aws_security_group.quarantine.id
+      QUARANTINE_SG_IDS    = jsonencode({for k, sg in aws_security_group.quarantine : k => sg.id})
       AUDIT_BUCKET         = aws_s3_bucket.ai_audit.bucket
       APPROVAL_API_URL     = aws_apigatewayv2_api.approval.api_endpoint
       BEDROCK_MODEL_ID     = "anthropic.claude-3-haiku-20240307-v1:0"
@@ -250,7 +250,7 @@ resource "aws_lambda_function" "approval_handler" {
   environment {
     variables = {
       SLACK_WEBHOOK_URL = var.slack_webhook_url
-      QUARANTINE_SG_ID  = aws_security_group.quarantine.id
+      QUARANTINE_SG_IDS = jsonencode({for k, sg in aws_security_group.quarantine : k => sg.id})
       AUDIT_BUCKET      = aws_s3_bucket.ai_audit.bucket
     }
   }
@@ -266,9 +266,9 @@ resource "aws_lambda_function" "approval_handler" {
 # 8. OUTPUTS — useful values after terraform apply
 # -----------------------------------------------------------------------------
 
-output "quarantine_sg_id" {
-  description = "Security group ID for EC2 containment"
-  value       = aws_security_group.quarantine.id
+output "quarantine_sg_ids" {
+  description = "Quarantine SG IDs per customer VPC"
+  value       = {for k, sg in aws_security_group.quarantine : k => sg.id}
 }
 
 output "ai_audit_bucket" {

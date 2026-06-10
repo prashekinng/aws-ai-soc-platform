@@ -1,0 +1,1 @@
+{"statusCode": 200, "body": "{\"finding_id\": \"test-finding-001\", \"action\": {\"action\": \"PENDING_HUMAN_APPROVAL\", \"instance_id\": \"i-09ae5cf4bdcb8be61\", \"finding_id\": \"test-finding-001\"}}"}
