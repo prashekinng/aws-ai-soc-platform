@@ -45,10 +45,12 @@ s3_client       = boto3.client("s3",               region_name=os.environ["AWS_R
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 SLACK_WEBHOOK_URL  = os.environ["SLACK_WEBHOOK_URL"]
-QUARANTINE_SG_ID   = os.environ["QUARANTINE_SG_ID"]
+QUARANTINE_SG_IDS  = json.loads(os.environ["QUARANTINE_SG_IDS"])
 AUDIT_BUCKET       = os.environ["AUDIT_BUCKET"]
 APPROVAL_API_URL   = os.environ["APPROVAL_API_URL"]
 BEDROCK_MODEL_ID   = os.environ["BEDROCK_MODEL_ID"]
+
+
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -60,6 +62,15 @@ def lambda_handler(event, context):
 
     finding    = extract_finding(event)
     finding_id = finding.get("id", str(uuid.uuid4()))
+
+    # Filter out low severity findings — only process HIGH (7+) and CRITICAL
+    severity = finding.get("severity", 0)
+    if isinstance(severity, (int, float)) and severity < 7:
+        print(f"Skipping low severity finding ({severity}): {finding_id}")
+        return {"statusCode": 200, "body": json.dumps({"finding_id": finding_id, "action": "SKIPPED_LOW_SEVERITY"})}
+    if isinstance(severity, str) and severity.upper() not in ["HIGH", "CRITICAL"]:
+        print(f"Skipping low severity finding ({severity}): {finding_id}")
+        return {"statusCode": 200, "body": json.dumps({"finding_id": finding_id, "action": "SKIPPED_LOW_SEVERITY"})}
 
     # Step 1 — Extract observables (IP, instance ID)
     observables = extract_observables(finding)
@@ -82,7 +93,6 @@ def lambda_handler(event, context):
     write_audit_log(finding_id, finding, vt_result, aws_context, verdict, action_taken)
 
     return {"statusCode": 200, "body": json.dumps({"finding_id": finding_id, "action": action_taken})}
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 1 — EXTRACT FINDING
@@ -368,11 +378,15 @@ def handle_auto_block(verdict, observables, aws_context, finding_id):
     if instance_id and original_sgs:
         try:
             # Move EC2 to quarantine SG — this is the containment action
+            customer = aws_context.get("customer", "unknown")
+            quarantine_sg = QUARANTINE_SG_IDS.get(customer)
+            if not quarantine_sg:
+                raise Exception(f"No quarantine SG found for customer {customer}")
             ec2_client.modify_instance_attribute(
                 InstanceId=instance_id,
-                Groups=[QUARANTINE_SG_ID]
+                Groups=[quarantine_sg]
             )
-            action_taken = f"EC2 {instance_id} moved to quarantine SG {QUARANTINE_SG_ID}"
+            action_taken = f"EC2 {instance_id} moved to quarantine SG {quarantine_sg}"
             print(action_taken)
 
             # Post to Slack with full AI report + confirmation
@@ -385,7 +399,7 @@ def handle_auto_block(verdict, observables, aws_context, finding_id):
                 "action":        "AUTO_BLOCK_EXECUTED",
                 "instance_id":   instance_id,
                 "original_sgs":  original_sgs,
-                "quarantine_sg": QUARANTINE_SG_ID
+                "quarantine_sg": quarantine_sg
             }
 
         except Exception as e:

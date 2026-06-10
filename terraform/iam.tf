@@ -221,8 +221,15 @@ resource "aws_iam_role_policy" "ai_triage_permissions" {
       # Bedrock — invoke Claude 3 Haiku only (least privilege)
       {
         Effect   = "Allow"
-        Action   = ["bedrock:InvokeModel","aws-marketplace:ViewSubscriptions","aws-marketplace:Subscribe"]
+        Action   = ["bedrock:InvokeModel"]
         Resource = "arn:aws:bedrock:ap-south-1::foundation-model/anthropic.claude-3-haiku-20240307-v1:0"
+      },
+
+      # Marketplace — required to subscribe/view Bedrock model access
+      {
+        Effect   = "Allow"
+        Action   = ["aws-marketplace:ViewSubscriptions","aws-marketplace:Subscribe"]
+        Resource = "*"
       },
 
       # EC2 — describe instances (get customer tag + current SG)

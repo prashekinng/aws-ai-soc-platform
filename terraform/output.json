@@ -1,0 +1,1 @@
+{"statusCode": 200, "body": "{\"finding_id\": \"test-autoblk-001\", \"action\": {\"action\": \"AUTO_BLOCK_EXECUTED\", \"instance_id\": \"i-09ae5cf4bdcb8be61\", \"original_sgs\": [\"sg-0878ca9709b705b89\"], \"quarantine_sg\": \"sg-06902b74186fda08f\"}}"}

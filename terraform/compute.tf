@@ -1,19 +1,13 @@
 # data source to fetch latest AMI
-data "aws_ami" "amazon_linux" {
-  most_recent = true
-  owners      = ["amazon"]
-
-  filter {
-    name   = "name"
-    values = ["al2023-ami-*-x86_64"]
-  }
+locals {
+  customer_ami = "ami-016f910f55cb4096d"
 }
 
 
 # Define the EC2 Instance
 resource "aws_instance" "customer_ec2" {
   for_each = var.customers
-  ami           = data.aws_ami.amazon_linux.id
+  ami           = local.customer_ami
   instance_type = "t3.micro"
   subnet_id = aws_subnet.public[each.key].id
   vpc_security_group_ids = [aws_security_group.sg[each.key].id]
@@ -24,8 +18,9 @@ resource "aws_instance" "customer_ec2" {
   }
 
   tags = {
-    Name = "cms-${each.key}-ec2"
-    project = var.project
+  Name     = "cms-${each.key}-ec2"
+  Customer = each.key
+  project  = var.project
   }
 }
 
