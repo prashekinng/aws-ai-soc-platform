@@ -40,7 +40,7 @@ ec2_client      = boto3.client("ec2",              region_name=os.environ["AWS_R
 ssm_client      = boto3.client("ssm",              region_name=os.environ["AWS_REGION_NAME"])
 bedrock_client  = boto3.client("bedrock-runtime",  region_name=os.environ["AWS_REGION_NAME"])
 s3_client       = boto3.client("s3",               region_name=os.environ["AWS_REGION_NAME"])
-
+lambda_client   = boto3.client("lambda",           region_name=os.environ["AWS_REGION_NAME"])
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
@@ -63,33 +63,39 @@ def lambda_handler(event, context):
     finding    = extract_finding(event)
     finding_id = finding.get("id", str(uuid.uuid4()))
 
-    # Filter out low severity findings — only process HIGH (7+) and CRITICAL
-    severity = finding.get("severity", 0)
-    if isinstance(severity, (int, float)) and severity < 7:
-        print(f"Skipping low severity finding ({severity}): {finding_id}")
-        return {"statusCode": 200, "body": json.dumps({"finding_id": finding_id, "action": "SKIPPED_LOW_SEVERITY"})}
-    if isinstance(severity, str) and severity.upper() not in ["HIGH", "CRITICAL"]:
-        print(f"Skipping low severity finding ({severity}): {finding_id}")
-        return {"statusCode": 200, "body": json.dumps({"finding_id": finding_id, "action": "SKIPPED_LOW_SEVERITY"})}
-
     # Step 1 — Extract observables (IP, instance ID)
     observables = extract_observables(finding)
     print(f"Observables: {observables}")
 
-    # Step 2 — Enrich: VirusTotal
+    # Step 2 — Invoke CloudTrail agent (supervisor calling specialist)
+    # Runs first so narrative enriches the triage prompt
+    cloudtrail_narrative = invoke_cloudtrail_agent(event)
+
+    # Step 3 — Enrich: VirusTotal
     vt_result = enrich_virustotal(observables.get("ip"))
 
-    # Step 3 — Enrich: AWS context
+    # Step 4 — Enrich: AWS context
     aws_context = enrich_aws_context(observables.get("instance_id"))
 
-    # Step 4 — Call Bedrock for triage verdict
-    verdict = call_bedrock(finding, vt_result, aws_context)
-    print(f"AI verdict: {verdict}")
+    # Step 5 — Call Bedrock for triage verdict (now includes CloudTrail context)
+    verdict = call_bedrock(finding, vt_result, aws_context, cloudtrail_narrative)
+    print(f"Triage verdict: {verdict}")
 
-    # Step 5 — Route based on verdict
+    # Step 6 — Adversarial agent: second Bedrock call challenges the verdict
+    adversarial_verdict = call_bedrock_adversarial(finding, verdict, cloudtrail_narrative)
+    print(f"Adversarial verdict: {adversarial_verdict}")
+
+    # Step 7 — Conflict resolution
+    # If triage and adversarial disagree on action — force HUMAN_APPROVE
+    if verdict.get("recommended_action") != adversarial_verdict.get("recommended_action"):
+        print("Triage and adversarial agents disagree — forcing HUMAN_APPROVE")
+        verdict["recommended_action"] = "HUMAN_APPROVE"
+        verdict["reasoning"] += " (Overridden: adversarial agent disagreed — escalating to human.)"
+
+    # Step 8 — Route based on final verdict
     action_taken = route_verdict(verdict, observables, aws_context, finding_id)
 
-    # Step 6 — Write audit log
+    # Step 9 — Write audit log
     write_audit_log(finding_id, finding, vt_result, aws_context, verdict, action_taken)
 
     return {"statusCode": 200, "body": json.dumps({"finding_id": finding_id, "action": action_taken})}
@@ -217,6 +223,34 @@ def enrich_virustotal(ip_address):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# SUPERVISOR — INVOKE CLOUDTRAIL AGENT
+# Calls cms-cloudtrail-agent Lambda and waits for the narrative.
+# Fail-open: if agent fails, supervisor continues without CloudTrail context.
+# ══════════════════════════════════════════════════════════════════════════════
+
+def invoke_cloudtrail_agent(event):
+    try:
+        response = lambda_client.invoke(
+            FunctionName="cms-cloudtrail-agent",
+            InvocationType="RequestResponse",  # synchronous — wait for result
+            Payload=json.dumps(event)
+        )
+        payload = json.loads(response["Payload"].read())
+        narrative = payload.get("narrative", {})
+        print(f"CloudTrail agent narrative received: {json.dumps(narrative)}")
+        return narrative
+
+    except Exception as e:
+        print(f"CloudTrail agent invocation failed: {e} — proceeding without CloudTrail context")
+        return {
+            "narrative": "CloudTrail analysis unavailable.",
+            "attack_chain": [],
+            "mitre_techniques": [],
+            "risk_level": "Unknown",
+            "analyst_note": "CloudTrail agent did not respond."
+        }
+
+# ══════════════════════════════════════════════════════════════════════════════
 # STEP 4 — ENRICH: AWS CONTEXT
 # Pulls EC2 instance details to identify the affected customer and current state.
 # The Customer tag on each EC2 tells us which of the 5 customers is affected.
@@ -258,14 +292,19 @@ def enrich_aws_context(instance_id):
         return {"instance_id": instance_id, "error": str(e), "customer": "unknown", "current_sg_ids": []}
 
 
-# ══════════════════════════════════════════════════════════════════════════════
-# STEP 5 — CALL BEDROCK
-# Sends the enriched finding to Claude 3 Haiku via AWS Bedrock.
-# Temperature = 0 for maximum consistency — same input → same output every time.
-# Returns structured JSON verdict.
-# ══════════════════════════════════════════════════════════════════════════════
+def call_bedrock(finding, vt_result, aws_context, cloudtrail_narrative=None):
 
-def call_bedrock(finding, vt_result, aws_context):
+    # Format CloudTrail narrative section — empty string if not available
+    ct_section = ""
+    if cloudtrail_narrative and cloudtrail_narrative.get("narrative") != "CloudTrail analysis unavailable.":
+        ct_section = f"""
+CLOUDTRAIL ATTACK NARRATIVE (from CloudTrail agent):
+Narrative: {cloudtrail_narrative.get('narrative', 'N/A')}
+Attack chain: {' → '.join(cloudtrail_narrative.get('attack_chain', []))}
+MITRE techniques: {', '.join(cloudtrail_narrative.get('mitre_techniques', []))}
+CloudTrail risk level: {cloudtrail_narrative.get('risk_level', 'Unknown')}
+Analyst note: {cloudtrail_narrative.get('analyst_note', 'N/A')}
+"""
 
     prompt = f"""You are a Tier 1 SOC analyst at a cloud security company.
 Analyse the following AWS security finding and return a triage verdict.
@@ -281,7 +320,7 @@ Customer affected: {aws_context.get('customer', 'unknown')}
 Instance ID: {aws_context.get('instance_id', 'N/A')}
 Instance state: {aws_context.get('instance_state', 'unknown')}
 Current security groups: {aws_context.get('current_sg_ids', [])}
-
+{ct_section}
 DECISION RULES:
 - AUTO_BLOCK: Use ONLY when VirusTotal malicious_count > 5 AND finding type indicates active compromise (C2 activity, crypto mining, confirmed brute force with successful login). This automatically quarantines the EC2.
 - HUMAN_APPROVE: Use for high severity but ambiguous findings (IAM anomalies, unusual API calls, after-hours access, first-seen activity). A human analyst will review before action is taken.
@@ -306,51 +345,95 @@ Return ONLY this JSON object. No explanation, no preamble, no markdown:
             body=json.dumps({
                 "anthropic_version": "bedrock-2023-05-31",
                 "max_tokens":        1000,
-                "temperature":       0,       # Must be 0 — deterministic verdicts
+                "temperature":       0,
                 "messages": [
                     {"role": "user", "content": prompt}
                 ]
             })
         )
-
         response_body = json.loads(response["body"].read())
         ai_text = response_body["content"][0]["text"]
-
-        # Parse the JSON response — strip any accidental markdown if present
         ai_text_clean = re.sub(r"```json|```", "", ai_text).strip()
-        verdict = json.loads(ai_text_clean)
-
-        return verdict
+        return json.loads(ai_text_clean)
 
     except json.JSONDecodeError as e:
-        print(f"Bedrock returned non-JSON response: {ai_text}. Error: {e}")
-        # Safe fallback — always route to human if AI response is unparseable
+        print(f"Bedrock returned non-JSON response. Error: {e}")
         return {
-            "severity":              "High",
-            "verdict":               "Needs Investigation",
-            "mitre_technique":       "Unknown",
-            "summary":               "AI triage failed to parse response. Manual review required.",
-            "recommended_action":    "HUMAN_APPROVE",
-            "reasoning":             "Bedrock response could not be parsed — defaulting to human review.",
-            "containment_steps":     ["Review finding manually in GuardDuty console"],
-            "customer_impact":       "Unknown — manual investigation required",
+            "severity": "High", "verdict": "Needs Investigation",
+            "mitre_technique": "Unknown",
+            "summary": "AI triage failed to parse response. Manual review required.",
+            "recommended_action": "HUMAN_APPROVE",
+            "reasoning": "Bedrock response could not be parsed — defaulting to human review.",
+            "containment_steps": ["Review finding manually in GuardDuty console"],
+            "customer_impact": "Unknown — manual investigation required",
             "false_positive_likelihood": "Unknown"
         }
 
     except Exception as e:
         print(f"Bedrock call failed: {e}")
         return {
-            "severity":              "High",
-            "verdict":               "Needs Investigation",
-            "mitre_technique":       "Unknown",
-            "summary":               f"AI triage error: {str(e)}. Manual review required.",
-            "recommended_action":    "HUMAN_APPROVE",
-            "reasoning":             "Bedrock call failed — defaulting to human review.",
-            "containment_steps":     ["Review finding manually in GuardDuty console"],
-            "customer_impact":       "Unknown",
+            "severity": "High", "verdict": "Needs Investigation",
+            "mitre_technique": "Unknown",
+            "summary": f"AI triage error: {str(e)}. Manual review required.",
+            "recommended_action": "HUMAN_APPROVE",
+            "reasoning": "Bedrock call failed — defaulting to human review.",
+            "containment_steps": ["Review finding manually in GuardDuty console"],
+            "customer_impact": "Unknown",
             "false_positive_likelihood": "Unknown"
         }
 
+
+def call_bedrock_adversarial(finding, triage_verdict, cloudtrail_narrative=None):
+    """
+    Adversarial agent — second Bedrock call that challenges the triage verdict.
+    If it disagrees with recommended_action, supervisor forces HUMAN_APPROVE.
+    This is the multi-agent safety check.
+    """
+    ct_note = ""
+    if cloudtrail_narrative:
+        ct_note = f"CloudTrail narrative: {cloudtrail_narrative.get('narrative', 'N/A')}"
+
+    prompt = f"""You are a senior SOC analyst performing adversarial review.
+A junior analyst produced the triage verdict below. Your job is to challenge it.
+Look for errors in reasoning, missed context, or incorrect action recommendations.
+
+ORIGINAL FINDING TITLE: {finding.get('title', 'N/A')}
+ORIGINAL FINDING SEVERITY: {finding.get('severity', 'N/A')}
+{ct_note}
+
+TRIAGE VERDICT TO REVIEW:
+Recommended action: {triage_verdict.get('recommended_action')}
+Reasoning: {triage_verdict.get('reasoning')}
+False positive likelihood: {triage_verdict.get('false_positive_likelihood')}
+
+If you agree with the recommended_action, return the same value.
+If you disagree, return a different recommended_action with your reasoning.
+
+Return ONLY this JSON. No explanation, no preamble, no markdown:
+{{
+  "recommended_action": "AUTO_BLOCK | HUMAN_APPROVE | DISMISS",
+  "reasoning": "1-2 sentences — do you agree or disagree with the triage verdict and why"
+}}"""
+
+    try:
+        response = bedrock_client.invoke_model(
+            modelId=BEDROCK_MODEL_ID,
+            body=json.dumps({
+                "anthropic_version": "bedrock-2023-05-31",
+                "max_tokens":        500,
+                "temperature":       0,
+                "messages": [{"role": "user", "content": prompt}]
+            })
+        )
+        response_body = json.loads(response["body"].read())
+        ai_text = response_body["content"][0]["text"]
+        ai_text_clean = re.sub(r"```json|```", "", ai_text).strip()
+        return json.loads(ai_text_clean)
+
+    except Exception as e:
+        print(f"Adversarial agent failed: {e} — defaulting to triage verdict")
+        # If adversarial fails, return same action as triage — no conflict triggered
+        return {"recommended_action": triage_verdict.get("recommended_action"), "reasoning": "Adversarial agent unavailable."}
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STEP 6 — ROUTE VERDICT
